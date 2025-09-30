@@ -118,6 +118,8 @@ std::ostream & operator << (std::ostream & o, const std::span<const uint8_t> & i
   o << "(size: " << input.size() << ")\n";
   return o;
 }
+
+static constexpr std::span<const uint8_t> nullspan{};
 } // end of anonymous namespace
 
 //TODO: replace hardcoded IV with a randomly generated one
@@ -133,13 +135,22 @@ struct Cipher {
     finished,
   };
 
+  EVP_CIPHER_CTX * const context_ = nullptr;
+  const std::size_t block_size_ = 0;
+  const Key key_;
+  Mode mode_ = encrypt;
+  IV iv__;
+  const std::span<const uint8_t> iv_;
+  std::size_t written_ = 0;
+  Output output_;
+
   ~Cipher() {
     assert(nullptr != context_);
     EVP_CIPHER_CTX_free(context_);
   }
 
   Cipher(const std::vector<uint8_t> & key, const Mode mode = encrypt,
-      const IV & iv = {0x4b, 0x77, 0x62, 0xff, 0xa9, 0x03, 0xc1, 0x1e, 0x6f, 0xd8, 0x35, 0x93, 0x17, 0x2d, 0x54, 0xef, }) :
+      const std::span<const uint8_t> & iv = nullspan) :
     context_(EVP_CIPHER_CTX_new()),
     block_size_(EVP_CIPHER_get_block_size(EVP_aes_256_cbc())),
     key_(key.begin(), key.end()), mode_(mode), iv_(iv) {
@@ -149,6 +160,15 @@ struct Cipher {
     assert(finished != mode_);
 
     int result_code = 0;
+
+    if (nullspan.data() == iv_.data()) {
+      iv__.resize(0x10);
+      {
+        const int code = RAND_bytes(iv__.data(), iv__.size());
+        assert(1 == code);
+      }
+      const_cast<std::span<const uint8_t> &>(iv_) = std::span<const uint8_t>(iv__.begin(), iv__.end());
+    }
 
     switch (mode_) {
     case encrypt:
@@ -169,6 +189,8 @@ struct Cipher {
     assert(1 == result_code);
     output_.reserve(1024);
   }
+
+  std::span<const uint8_t> iv() const { return iv_; }
 
   constexpr std::size_t block_size() const { return block_size_; }
 
@@ -238,21 +260,6 @@ struct Cipher {
     output.reserve(output.size() + written_);
     std::copy(output_.begin(), output_.end(), std::back_inserter(output));
   }
-
-  EVP_CIPHER_CTX * const context_ = nullptr;
-
-  const Key key_;
-
-  Mode mode_ = encrypt;
-
-  const std::size_t block_size_ = 0;
-
-  //TODO: iv_ should be randomly generated, size might be related with the cipher's block size: aes256 -> 16 bytes.
-  const IV iv_;
-
-  Output output_;
-
-  std::size_t written_ = 0;
 };
 
 struct Key;
@@ -1484,29 +1491,17 @@ private:
   std::size_t encrypt(Message in, Message & out) {
     assert(!encryption_key_.empty());
     const std::size_t out_original_size = out.size();
-
-    //TODO move this to cipher
-    std::vector<uint8_t> iv(0x10);
-    {
-      const int code = RAND_bytes(iv.data(), iv.size());
-      assert(1 == code);
-    }
-
+    Cipher encryption(encryption_key_, Cipher::encrypt);
+    const std::span<const uint8_t> iv = encryption.iv();
+    Cipher decryption(encryption_key_, Cipher::decrypt, iv);
     out.reserve(out.size() + in.size() + 0x10);
     std::copy(iv.begin(), iv.end(), std::back_inserter(out));
-
     pad(in);
-
-    {
-      Cipher cipher(encryption_key_, Cipher::encrypt, iv);
-      cipher << in >> out;
-      assert(out.size() > out_original_size);
-    }
-
+    encryption << in >> out;
+    assert(out.size() > out_original_size);
     {
       std::vector<uint8_t> n;
-      Cipher cipher(encryption_key_, Cipher::decrypt, iv);
-      cipher << Cipher::Input(out.begin() + out_original_size + 0x10, out.end()) >> n;
+      decryption << Cipher::Input(out.begin() + out_original_size + iv.size(), out.end()) >> n;
       assert(std::equal(in.begin(), in.end(), n.begin(), n.end()));
     }
     return out.size() - out_original_size;
