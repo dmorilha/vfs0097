@@ -12,5 +12,5 @@ LIBS+=$(shell pkg-config --libs libusb-1.0;)
 
 #CXXFLAGS+=-fsanitize=thread
 
-main: second.cc
+main: main.cc
 	$(CXX) $(CXXFLAGS) $(LIBS) -o $@ $<;
