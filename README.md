@@ -12,4 +12,4 @@ Add the following line before `auth pam_unix.so` into your pam `/etc/pam.d/syste
 auth sufficient pam_exec.so # path to the compiled version
 ```
 
-![screenshot](./vfs0097.jpeg)
+![screenshot](./vfs0097.jpg)
